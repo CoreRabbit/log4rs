@@ -9,6 +9,7 @@ use serde::{de, Deserialize, Deserializer};
 use serde_value::Value;
 #[cfg(feature = "file")]
 use std::collections::BTreeMap;
+use std::io;
 
 #[cfg(feature = "file")]
 use file::Deserializable;
@@ -32,6 +33,11 @@ pub trait Append: fmt::Debug + Send + Sync + 'static {
 
     /// Flushes all in-flight records.
     fn flush(&self);
+
+    /// Called after a log file has been rotated. Doesn't apply to non-file appenders.
+    fn post_rotate(&self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 #[cfg(feature = "file")]
