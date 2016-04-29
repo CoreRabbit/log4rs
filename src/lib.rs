@@ -394,6 +394,7 @@ impl SharedLogger {
     }
 }
 
+
 pub struct Logger(Arc<ArcSwap<SharedLogger>>);
 
 impl Logger {
@@ -447,6 +448,45 @@ pub fn init_config(config: config::Config) -> Result<Handle, SetLoggerError> {
     log::set_boxed_logger(Box::new(logger)).map(|()| handle)
 }
 
+/// Initializes the global logger as a log4rs logger configured via a file.
+///
+/// Configuration is read from a file located at the provided path on the
+/// filesystem and appenders are created from the provided `Deserializers`.
+///
+/// Any nonfatal errors encountered when processing the configuration are
+/// reported to stderr.
+pub fn init_file<P: AsRef<Path>>(path: P, deserializers: Deserializers) -> Result<Handle, Error> {
+    let path = path.as_ref().to_path_buf();
+    let format = try!(get_format(&path));
+    let source = try!(read_config(&path));
+    let config = try!(parse_config(&source, format, &deserializers));
+
+    let mut handle = None;
+
+    try!(log::set_logger(|max_log_level| {
+        let refresh_rate = config.refresh_rate();
+        let config = config.into_config();
+        let logger = Logger::new(config);
+
+        max_log_level.set(logger.max_log_level());
+        if let Some(refresh_rate) = refresh_rate {
+            ConfigReloader::start(path,
+                                  format,
+                                  refresh_rate,
+                                  source,
+                                  deserializers,
+                                  &logger,
+                                  max_log_level);
+        }
+
+        handle = Some(Handle { inner: logger.inner.clone() });
+        Box::new(logger)
+    }));
+
+    // Must be some if set_logger did not err.
+    Ok(handle.take().unwrap())
+}
+
 /// A handle to the active logger.
 pub struct Handle {
     shared: Arc<ArcSwap<SharedLogger>>,
@@ -458,6 +498,16 @@ impl Handle {
         let shared = SharedLogger::new(config);
         log::set_max_level(shared.root.max_log_level());
         self.shared.store(Arc::new(shared));
+    }
+
+    /// Reopen file appender files
+    pub fn reopen(&self) -> io::Result<()> {
+        let shared = self.inner.get();
+        for appender in &shared.appenders {
+            try!(appender.appender.post_rotate());
+        }
+
+        Ok(())
     }
 }
 
